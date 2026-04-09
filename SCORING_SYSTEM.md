@@ -32,11 +32,13 @@ IntentInterpreter  →  extracts dials, phrases, comparisons, constraints
     ↓
 Resolver           →  maps phrases to DB enums via synonym map + fuzzy match
     ↓
-Taxonomist         →  handles phrases the Resolver couldn't map (LLM fallback)
+Enricher           →  handles phrases the Resolver couldn't map (LLM fallback)
     ↓
 Merger             →  builds the "search contract" (structured scoring instructions)
     ↓
-Retriever          →  hard-filters the game database to a candidate pool
+Query Planner      →  classifies signals into Class A / B / C; extracts class_b_signals
+    ↓
+Retriever          →  Class A hard filters + Class B two-pass cascade → candidate pool
     ↓
 SCORER             →  ranks every candidate with a numeric score  ← you are here
     ↓
@@ -59,6 +61,18 @@ Every scoring dimension is split into up to **four tiers** based on how the sign
 | **Tier 4** | **Tolerance** | User accepted, not requested | "deck building is fine" → mild nudge, won't drive results |
 
 The tolerance tier exists because acceptance language ("okay with", "fine if", "can handle") is a fundamentally different signal from enthusiasm. A game shouldn't rank top because the user said it's acceptable — but it's still marginally better than a game with no signal at all.
+
+### Signal Priority Architecture: Class A / B / C
+
+Before the Scorer runs, explicit signals are classified into priority tiers that determine how strictly they're enforced upstream in the Retriever:
+
+| Class | Signals | Retriever treatment | Scorer treatment |
+|-------|---------|---------------------|-----------------|
+| **Class A** | Player count, playtime, age | Hard filter — always enforced, never relaxed | Not scored (already filtered) |
+| **Class B** | Mechanics, categories, item type (when explicitly stated) | Hard filter in Pass 1. Backfilled if fewer than 6 results. | 1.8× multiplier in blend mode to rank Class B matches above backfill |
+| **Class C** | Complexity, tone, interaction, luck, format | Not filtered — Scorer only | Standard distance-based scoring |
+
+**Why this matters:** In a purely additive scoring model, a request for "deck builder" adds points — but a non-deck-builder with enough secondary signal overlap can outscore actual deck builders. Treating explicit category signals as hard filters prevents this: if you ask for a category, the Retriever enforces it before the Scorer sees any candidate.
 
 ### The 5 Intent Dials
 
@@ -92,12 +106,6 @@ Mechanics are multi-select tags on games (e.g. "Deck Building", "Worker Placemen
 | Dials mechanic match | **Moderate** | Macro: "euro game" → infers Worker Placement, Engine Building |
 | Inferred mechanic match | **Low** | Derived from anchor game ("like Wingspan") |
 | Tolerance mechanic match | **Minimal** | User said "deck building is okay" |
-| Penalty mechanic present | **Mild penalty** | Dial signal flagged this mechanic as unwanted |
-
-**Penalty Mechanics** are a special case: dials can flag mechanics that are *bad fits*. Examples:
-- `strategic_ceiling:low` (user wants simple decisions) → penalizes Worker Placement, Engine Building, Auction, Negotiation
-- `approachability:high` (easy to teach) → penalizes Variable Player Powers, Market Manipulation, Card Crafting
-
 **Disliked Anchor Penalty:** If the user said "I hated Root", Root's mechanics (Area Control) are extracted and penalized across all candidates — unless the user also explicitly requested that mechanic in the same query.
 
 > *Example:* "I hated Root but love asymmetric games" → Area Control: moderate penalty. Asymmetric Powers: exempt.
@@ -138,7 +146,7 @@ No dials or inferred tier — family labels are too coarse for dial inference.
 Complexity is split into **two independent dimensions**, each scored separately:
 
 #### C1. Legacy Path (backward compatibility)
-Direct enum phrases ("Light", "Medium", "Heavy") and Taxonomist-mapped complexity terms still score against `game.complexity` with distance-graduated rewards/penalties.
+Direct enum phrases ("Light", "Medium", "Heavy") and Enricher-mapped complexity terms still score against the legacy complexity field with distance-graduated rewards/penalties.
 
 | Distance | Explicit | Inferred |
 |---|---|---|
@@ -174,12 +182,13 @@ Separate from rules complexity. A game can be easy to learn but brutally deep (e
 
 ---
 
-### D. Ordinal Distance Scoring (Interaction, Luck, Tone, Format, Turn Flow, Setup Effort, Replayability)
+### D. Ordinal Distance Scoring (Luck, Tone, Format, Turn Flow, Setup Effort, Replayability)
 
-Seven fields share a common scoring pattern: ordinal-scale fields where the "distance" from the requested value determines whether you get a bonus or a penalty.
+Six fields share a common scoring pattern: ordinal-scale fields where the "distance" from the requested value determines whether you get a bonus or a penalty.
+
+> **Note on Interaction:** The old 4-tier `Interaction` ordinal field was retired as a scoring dimension. Social interaction is now scored through **Interaction Intensity** (1–10 scale, Section L) for dial and anchor-inferred signals, and through **Experience Mode** antipode penalties (Section J) for co-op vs. competitive mismatches. The finer-grained scale better captures the spectrum between "pleasant area control" and "full-contact negotiation."
 
 **Ordinal scales:**
-- Interaction: No Interaction → Indirect → Direct Non-Aggressive → Direct Aggressive
 - Luck: None → Low → Medium → High
 - Tone: Relaxed → Playful → Thinky → Competitive → Tense → Cutthroat → Epic
 - Format: Strategic Build → Puzzle/Optimization → Competitive Scoring → Tactical Conflict → Narrative/Campaign → Hidden Info/Deduction → Social/Negotiation → Party/Performance
@@ -199,8 +208,9 @@ Each field is scored at three tiers (Explicit / Dials / Inferred) with distance-
 
 - **Tone and Format** carry the highest bonuses and penalties — they define experiential identity. A Relaxed puzzle game and a Tense wargame feel completely different even if they share mechanics. A mismatch here cascades through the Tone/Format multiplier (see Section I).
 - **Luck Factor** carries milder penalties — many players accept Medium luck even if they prefer None. The penalty scales more gradually.
-- **Interaction** is heavily penalized at distance because social experience (conflict vs. cooperation) is non-negotiable for most users.
 - **Turn Flow, Setup Effort, Replayability** are treated as secondary considerations — useful tiebreakers, not primary filters.
+
+> Social interaction intensity is handled by Section L (Interaction Intensity, 1–10 scale), not by ordinal distance scoring here.
 
 > *Example — Tone:*
 > User: "something chill" → SYNONYM_MAP maps "chill" → explicit tone: Relaxed.
@@ -268,7 +278,9 @@ The bonus scales with both the **strength** of the expressed preference (low / m
 
 #### Inverse-Semantics Dimensions
 
-Some dial names have inverted semantics. `approachability` is one: when a user says "lighter than X", `direction: higher` means "higher approachability", which maps to *lower* index on the complexity scale. The Scorer flips the direction for these cases automatically.
+Some dial names have inverted semantics. `approachability` is the only one: when a user says "lighter than X", `direction: higher` means "higher approachability", which maps to *lower* index on the complexity scale. The Scorer flips the direction automatically.
+
+> `friction` was previously listed as inverted, but this was incorrect — `friction=high` means long sessions, and `direction: 'lower'` (want a shorter game) maps directly to a lower playtime index without needing inversion. The erroneous `invert: true` flag was subsequently removed.
 
 ---
 
@@ -315,6 +327,22 @@ These are the system's strongest penalties — because recommending a competitiv
 
 ---
 
+### J5. Semantic Cosine Similarity (FEA-04)
+
+Pre-computed 768-dimensional embedding vectors (Gemini Embedding 001) are stored in Cloudflare KV for all ~1,100 games alongside the existing catalog data. At query time, phrases the Resolver couldn't map to database enums are sent to a CF Worker `/api/embed` endpoint, which returns query vectors in parallel with the catalog fetch.
+
+The Scorer computes cosine similarity between each unmapped phrase and each candidate game's vector. Games above a similarity threshold receive a bonus; games that score high against a **negated** phrase (e.g. "not violent") receive a penalty. A per-phrase cap prevents any single semantic signal from dominating the score.
+
+**Purpose:** Handles unbounded vocabulary — vibe language ("thinky but chill"), niche mechanics, and unlisted categories that the synonym dictionary cannot reach.
+
+**Text used for game vectors:** The experiential and qualitative description of each game — fields that capture atmosphere, play feel, and what makes each game distinctive to play. Structured taxonomy fields are excluded; those are already handled by exact-match scoring.
+
+**Negation handling:** When the user's phrase was negated (e.g. "not a wargame", "nothing violent"), the sign of the cosine score is inverted — a high similarity to a negated phrase becomes a penalty.
+
+**Design note:** Board game descriptions cluster in a narrow band of cosine similarity (~0.43–0.51) for any given phrase. The threshold and cap are calibrated to extract real signal from that narrow range without letting any individual semantic match dominate.
+
+---
+
 ### K. Language Dependence
 
 Language dependence sits on a 3-point scale: None → Low → High.
@@ -339,13 +367,20 @@ Language dependence sits on a 3-point scale: None → Low → High.
 
 ### L. Interaction Intensity
 
-A 1–5 numeric scale for *how* aggressively players affect each other. More granular than the 4-level `interaction` field. Scored from the `social_temperature` dial.
+A **1–10 numeric scale** for *how* aggressively players affect each other — more granular than the retired 4-tier `interaction` ordinal field it replaced. Used in two scoring paths:
 
-| Condition | Weight |
+**Dials path** — from the `social_temperature` dial. "Chill" maps to low intensity range; "cutthroat" maps to high. Games outside the preferred range are penalized proportionally.
+
+**Inferred path** — when anchor games are referenced (e.g. "something like Terraforming Mars"), the Merger averages the anchor games' intensity values. The Scorer then rewards candidates close to that average and penalizes those far from it:
+
+| Distance from anchor average | Effect |
 |---|---|
-| Intensity within preferred range | **Small bonus** |
-| Outside range by 1 | **Small penalty** |
-| Outside range by 2+ | **Moderate penalty** |
+| Exact match | **Small bonus** |
+| Close (1–2 steps) | Neutral |
+| Moderate distance | **Mild penalty** |
+| Far | **Significant penalty** |
+
+This prevents high-aggression games from ranking equally alongside low-intensity anchors when no explicit social signal was given.
 
 ---
 
@@ -368,7 +403,7 @@ Only **dials-tier penalties** are doubled — not explicit-tier (which already h
 
 ### Text Matching (Cross-Cutting)
 
-The Scorer scans the game's text fields against the user's original phrases. The text corpus searched includes the game's **verdict, summary, pros, cons, and Mood Tags** (a dedicated field of comma-separated mood and visual style phrases, e.g. "dark and gritty, medieval atmosphere, immersive lore"). This means atmospheric or visual-style keywords from the user's prompt — "dark", "gritty", "cozy", "atmospheric" — match against specifically curated mood descriptions, not just whatever happens to appear in the summary.
+The Scorer scans the game's text content against the user's original phrases. The corpus includes both curated mood and atmosphere descriptions and editorial summaries — meaning atmospheric and visual-style keywords from the user's prompt match against specifically curated mood language, not just whatever happens to appear in the general summary.
 
 Keywords are classified into four categories:
 
@@ -422,6 +457,20 @@ This is a soft penalty, not a hard filter. A game with "demonic" in its summary 
 
 ## 4. Global Modifiers
 
+### Class B Match Multiplier
+
+When the Retriever runs in **blend mode** — meaning the user's explicit category signals matched fewer than the target result count in the database, so the Retriever backfilled with additional items that don't satisfy the category constraint — the Scorer applies a **1.8× multiplier** to the scores of the items that *do* match.
+
+This ensures categorical intent is preserved in the ranking even when exact matches are scarce. The backfill items can score highly on complementary signals (complexity, tone, format) without outranking the categorically correct results.
+
+| `pass_mode` | Multiplier Applied? |
+|-------------|---------------------|
+| `pass1` (full result set satisfies category constraint) | No — all items already qualify |
+| `blend` (partial match + backfill) | Yes — matching items ×1.8 |
+| `fallback` (zero matches, full backfill) | No — no qualifying items exist |
+
+---
+
 ### Semantic Floor Cap
 
 If the query contains **semantic signals** (theme, vibe, mechanic, category preferences) but a candidate game matched **none of them**, the game is capped to prevent it from appearing in results on logistics merits alone.
@@ -446,7 +495,7 @@ When two candidates have the same final score, ties are broken by **six criteria
 | 2 | **Source: inventory first** | Vault games (the seller's physical collection) get display priority on ties — they represent real purchase opportunities |
 | 3 | **Weighted scoring breadth (desc)** | More dimensions matched = more holistically relevant. Tone/Format are weighted higher than other dimensions, reflecting their importance to experiential fit |
 | 4 | **Data completeness (desc)** | Games with more taxonomy fields populated are more reliably scored — they've had more scoring dimensions available |
-| 5 | **Tiebreaker field (desc)** | Composite Airtable score combining popularity + availability. Surfaces better-known and more accessible games before obscure ones at equal relevance |
+| 5 | **Tiebreaker field (desc)** | Composite popularity + availability score pre-computed at enrichment time. Surfaces better-known and more accessible games before obscure ones at equal relevance |
 | 6 | **Alphabetical (asc)** | Stable, deterministic, zero-bias final fallback |
 
 ---
@@ -543,4 +592,3 @@ The contrast illustrates the system's core design: tone and format define experi
 
 ---
 
-*Scorer v5.8 / ConstantsProvider v9.5*

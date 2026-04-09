@@ -67,7 +67,7 @@ This system is different: **LLMs handle only natural language understanding. Jav
 
 **LLM calls are bounded and purposeful.** The IntentInterpreter always runs (~2,000 tokens). The EnricherJS — a fallback for unrecognized anchor games — runs only when needed. The Formatter generates per-game blurbs via a batched LLM call at the end. The semantic embed call runs in a CF Worker alongside the catalog fetch — it's not an LLM call, so it adds ~100–200ms without touching the token budget.
 
-**5 Intent Dials convert fuzzy language to structured signals deterministically.** "Chill" → `social_temperature:low` → `ideal_interaction: Indirect`. Zero LLM tokens spent on this mapping. ~84% of user vocabulary maps through this dictionary without an LLM.
+**5 Intent Dials convert fuzzy language to structured signals deterministically.** "Chill" → `social_temperature:low` → `ideal_interaction: Indirect`. Zero LLM tokens spent on this mapping. The large majority of common board game vocabulary maps through this dictionary without an LLM. Atmospheric and vibe language that doesn't map cleanly to a field is handled by the semantic search layer. The Enricher only fires for the residual: unknown anchor games and structural phrases that fall through both.
 
 **4-tier scoring signal hierarchy.** Explicit (user said it) > Dials (inferred from vibe language) > Inferred (derived from anchor games) > Tolerance (user said it's acceptable). Each tier has calibrated point weights — a game can't win on tolerance signals alone.
 
@@ -92,7 +92,7 @@ This system is different: **LLMs handle only natural language understanding. Jav
 | Semantic embed call | CF Worker (not an LLM call; +100–200ms) |
 | Equivalent pure-LLM approach | ~$0.08–0.40/query |
 | Cost at 10k queries/month | ~$12 vs ~$800–4,000 |
-| Consistency (10-prompt validation suite) | 100% on current suite (up from 62.5% in Feb 2026) — filtering, scoring, and ranking are fully deterministic |
+| Consistency (10-prompt validation suite) | 100% on current suite (up from 62.5% in Feb 2026) — the suite is small; this reflects the deterministic scoring pipeline, not a comprehensive benchmark. New edge cases can surface inconsistencies; each is diagnosed and fixed in the LLM extraction layer. |
 | Airtable data transfer reduction | ~99.75% per query (KV cache vs. 11 paginated calls) |
 | Game catalog | 1,000+ titles, 15 taxonomy dimensions each |
 | Semantic vectors in KV | 1,000+ × 768-dim float32 (Gemini Embedding 001) |

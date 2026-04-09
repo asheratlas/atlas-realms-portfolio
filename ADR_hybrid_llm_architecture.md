@@ -28,7 +28,7 @@ The challenge isn't "how do I get an LLM to recommend games." It's "how do I rel
 
 ## The Options I Considered
 
-**Why not pure LLM?** Inconsistency is disqualifying for a product. Users notice when the same query returns different results on refresh. And retroactive LLM explanations ("this game appears because it matches your preferences") are not grounded in any actual computation — the model is confabulating. The 37% inconsistency rate I measured was the clearest signal to abandon the pure-LLM path.
+**Why not pure LLM?** Inconsistency is disqualifying for a product. Users notice when the same query returns different results on refresh. And retroactive LLM explanations ("this game appears because it matches your preferences") are not grounded in any actual computation — the model is confabulating. A small-scale diagnostic I ran — identical prompts across successive runs — showed 37.5% returned different result sets. That was the clearest signal to abandon the pure-LLM path.
 
 There's also a training data bias: LLMs are trained on text that skews heavily toward the most-discussed titles. In practice, the same 15–20 popular games surface across many different prompts regardless of how specific the query is. The long tail — games that fit the request better but are less written about — is structurally underrepresented.
 
@@ -107,7 +107,7 @@ Each dial level maps to a specific ideal value in the database. `approachability
 
 This gives three compounding wins:
 
-**1. Coverage without LLM cost.** ~84% of user language maps to one of these 5 dials via the synonym dictionary. No LLM token spent on "chill", "brain burning", "quick game", "casual", "hate dice."
+**1. Coverage without LLM cost.** The large majority of common board game language maps to one of these 5 dials via the synonym dictionary, with atmospheric and vibe language covered by the semantic search layer. No LLM token spent on "chill", "brain burning", "quick game", "casual", "hate dice."
 
 **2. Graceful degradation.** The ±1 ordinal distance tolerance means the system doesn't fail when it can't find a perfect match on every dimension simultaneously. "Easy to teach co-op for 4 under an hour" might not have a perfect specimen — but the best available option still scores clearly higher than everything else.
 
@@ -162,7 +162,7 @@ The system can be *honest* about match quality because it has a real score. LLMs
 
 **2. Consistency — measurably, with an honest ceiling**
 
-In February 2026, before the full hybrid architecture was locked in, I ran a diagnostic: 37.5% of identical prompts returned different top-6 result sets across successive runs. By March 2026, a structured 10-prompt validation suite returned identical results across 3 successive runs on every prompt — 100% consistency on that suite.
+In February 2026, before the full hybrid architecture was locked in, I ran a diagnostic: 37.5% of identical prompts returned different top-6 result sets in a small-scale diagnostic test. By March 2026, a structured 10-prompt validation suite returned identical results across 3 successive runs on every prompt — 100% consistency on that suite.
 
 The honest version of that number: it reflects the current state of a living system, not a permanent ceiling. When new users submit queries the IntentInterpreter has no explicit rules for, inconsistencies can surface again. The root cause is always the same — ambiguous language without a disambiguation rule — and the fix is always the same: identify the case, add a guardrail to the prompt, re-validate. I already have one new case in the queue.
 

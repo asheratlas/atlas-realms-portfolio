@@ -1,8 +1,6 @@
 # Atlas Realms Backend — Full Architecture Reference
 
-*v2 pipeline — ConstantsProvider v9.5, Resolver v4.10, Retriever v2.16, Scorer v5.8*
-
-A user types *"something light and co-op for 4 people, not too long"* into a Framer frontend. Within 2–4 seconds they receive six board game recommendations, ranked and annotated with a plain-English explanation of why each one fits. This document explains every decision the backend makes between those two events.
+A user types *"something light and co-op for 4 people, not too long"* into a React frontend. Within 5–10 seconds they receive six board game recommendations, ranked and annotated with a plain-English explanation of why each one fits. This document explains every decision the backend makes between those two events.
 
 For the *why* behind the architectural approach, read [`ADR_hybrid_llm_architecture.md`](./ADR_hybrid_llm_architecture.md) first.
 
@@ -11,21 +9,24 @@ For the *why* behind the architectural approach, read [`ADR_hybrid_llm_architect
 ## High-Level Architecture
 
 ```
-[User] → [Framer Frontend]
+[User] → [React frontend (Cloudflare Pages)]
            ↓  POST (raw query string)
 [Cloudflare Worker]  ← enforces CORS, routes to Flowise URL
            ↓
-[Flowise Pipeline — 7 nodes]
+[Flowise Pipeline — 8 nodes]
   Node 00  ConstantsProvider     → shared config registry (wired to all nodes)
   Node 01  IntentInterpreter     → LLM (always runs)
   Node 02  TheResolverJS         → JS (always runs)
-  Node 03  TheTaxonomist         → LLM (conditional — skips if nothing unresolved)
+  Node 03  TheEnricherJS         → LLM (conditional — skips if nothing unresolved)
   Node 04  TheMergerJS           → JS (always runs)
-  Node 05  TheRetrieverJSv2      → JS + Airtable fetch (always runs)
+  Node 04.5 TheQueryPlannerJS    → JS (always runs)
+  Node 05  TheRetrieverJSv2      → JS + CF KV fetch + embed call (always runs)
   Node 06  TheScorerJSv2         → JS (always runs)
-  Node 07  TheFormatterJSv2      → JS (always runs)
-           ↓
-[Framer Frontend] ← { recommendations: [...], query_summary: {...} }
+  Node 07  TheFormatterJSv4      → JS + Groq LLM blurbs (always runs)
+           ↓                            ↕
+[React frontend (Cloudflare Pages)] ← { recommendations: [...], query_summary: {...} }
+                                   ↕
+[Cloudflare Worker — Embed endpoint]  ← POST /api/embed → Gemini Embedding 001
 ```
 
 ---
@@ -46,7 +47,7 @@ Fields covered: mechanics (~40 options), categories (~70 options), rules_complex
 
 **STYLE_MACROS** — Five style keywords (euro, party, wargame, 18xx, 4X), each with hard constraints (allowed complexity ranges, allowed interaction levels) and soft inferences (implied mechanics, categories, format). These give you significant filtering power from a single user keyword.
 
-**SYNONYM_MAP** — ~150+ entries mapping natural-language phrases to specific `{ field, value }` pairs in the database. This is the primary deterministic path that avoids the Taxonomist LLM. Examples: "co-op" → `categories: Cooperative`, "brain burner" → `tone: Thinky`, "chill" → `tone: Relaxed`, "fiddly" → `setup_effort: High`.
+**SYNONYM_MAP** — ~150+ entries mapping natural-language phrases to specific `{ field, value }` pairs in the database. This is the primary deterministic path that avoids the Enricher LLM. Examples: "co-op" → `categories: Cooperative`, "brain burner" → `tone: Thinky`, "chill" → `tone: Relaxed`, "fiddly" → `setup_effort: High`.
 
 **AVERAGE_GAME_PROFILE** — A baseline representing a typical medium-weight hobby game. Used when the user says "something heavier" without naming a specific reference game — the comparison is evaluated against this baseline rather than failing.
 
@@ -119,7 +120,7 @@ The LLM is required to write out its `reasoning` field first, covering: the user
 ## Node 02 — TheResolverJS
 
 **Runs:** Every query  
-**Input:** IntentInterpreter JSON + ConstantsProvider + Airtable credentials  
+**Input:** IntentInterpreter JSON + ConstantsProvider  
 **Output:** `{ resolver_payload, taxonomist_payload, llm2_payload, merge_seed }`
 
 This is the bridge between natural language and the database. It runs 10 phases.
@@ -134,7 +135,7 @@ For every term in `core_terms`, the Resolver tries to map it to a specific `{ fi
 
 **Step 3 — Fuzzy enum match.** Only for multi-word phrases (single words are too ambiguous — "game" would match "Eurogame"). Checks if the phrase contains or is contained by any enum value. Only applied to mechanics, categories, tone, and format — fields where substring matching is semantically valid.
 
-**Step 4 — Unmapped.** Nothing matched. The phrase is added to `unmapped_phrases` and forwarded to the Taxonomist.
+**Step 4 — Unmapped.** Nothing matched. The phrase is added to `unmapped_phrases` and forwarded to the Enricher.
 
 The same 4-step chain runs on `tolerance_terms` separately, outputting to `tolerant_soft_preferences` — a lower-weight scoring tier.
 
@@ -160,51 +161,47 @@ Special cases:
 - `friction:high` without explicit minutes → a short-session target value derived from DIAL_MAPPINGS
 - `social_temperature` → maps to both `ideal_interaction` (enum string) AND `ideal_interaction_intensity` (numeric range on a 1–5 scale)
 
-### Airtable Fetch for Anchor Games
+### Anchor Game Lookup
 
-If there are mentioned games, the Resolver does a server-side filtered Airtable fetch using `filterByFormula` to retrieve only those specific games' data. Much faster than fetching all records. The filter uses `LEFT({Title_Normalized}, N) = "..."` which handles subtitle and edition variants — "Talisman" matches "Talisman: The Magical Quest Game 5th Edition." When multiple candidates match, exact title wins; otherwise shortest title (base game heuristic) wins.
+If there are mentioned games, the Resolver sends a lookup request to the CF Worker `/api/lookup` endpoint, which returns matching records directly from the KV catalog. This eliminates an Airtable round-trip for anchor resolution — anchor data is served from the same KV cache as the main catalog fetch. Title matching handles subtitle and edition variants — "Talisman" matches "Talisman: The Magical Quest Game 5th Edition." When multiple candidates match, exact title wins; otherwise shortest title (base game heuristic) wins.
 
 ### Output
 
 The Resolver outputs:
 - `resolver_payload` — all the structured preference signals (hard_filters, explicit_soft, dials_soft, inferred_soft, tolerant_soft, comparisons, text_match_phrases, negative_text_phrases)
-- `taxonomist_payload` — unmapped phrases for the Taxonomist
+- `enricher_payload` — unmapped phrases for the Enricher
 - `llm2_payload` — mentioned games not found in the database
-- `should_run_taxonomist` — true if either of the above is non-empty
+- `should_run_enricher` — true if either of the above is non-empty
 
 ---
 
-## Node 021 — TheTrimmer
+## Node 03 — TheEnricherJS (LLM, conditional)
 
-A thin utility node. If `should_run_taxonomist` is false, it emits `{ skip_taxonomist: true }` instead of forwarding the Resolver output. This prevents the Taxonomist LLM from running (and billing) on queries where everything resolved cleanly.
-
----
-
-## Node 03 — TheTaxonomist (LLM, conditional)
-
-**Runs:** ~30% of queries, only when Resolver has unresolved items  
-**Input:** Resolver's taxonomist_payload + llm2_payload + constants  
+**Runs:** ~40% of queries, only when Resolver has unresolved items
+**Input:** Resolver's unmapped phrases + unknown games + ConstantsProvider
 **Output:** Strict JSON with enrichment data
 
-The first thing the Taxonomist does is check for `"skip_taxonomist": true`. If present, it returns an empty response without processing.
+TheEnricherJS is a single JS node that makes direct Gemini API calls — true skip with zero LLM cost when nothing needs enriching, and parallel Task A + Task B via `Promise.all` when both fire.
 
-When it does run, it has three tasks:
+When it runs, it has two tasks:
 
-**Task A — Unknown Game Enrichment:** For each game not found in the database, the Taxonomist uses its LLM knowledge to provide taxonomy data (complexity, luck, interaction, tone, format, experience_mode, mechanics, categories, play time ranges). Only provides data if it can recall at least 2 concrete facts. Explicitly instructed not to hallucinate for unknown games.
+**Task A — Unknown Game Enrichment:** For each game not found in the database, TheEnricherJS uses its LLM knowledge to provide taxonomy data (complexity, luck, interaction, tone, format, experience_mode, mechanics, categories, play time ranges). Only provides data if it can recall at least 2 concrete facts.
 
-**Task B — Unmapped Phrase Resolution:** For phrases that went through the Resolver's 4-step chain without mapping, the Taxonomist uses semantic understanding to find the right database enum. It applies the same Compound Modifier Rule: "economic puzzles" should not map to the "Economic" category — the modifier "puzzles" shifts the meaning to `format: "Puzzle / Optimization"`.
+**Task B — Unmapped Phrase Resolution:** For phrases that went through the Resolver's 4-step chain without mapping, the Enricher uses semantic understanding to find the right database enum. Temperature 0.0 for deterministic classification. Applies the Compound Modifier Rule: "economic puzzles" should not map to "Economic" category — the modifier shifts the meaning to `format: "Puzzle / Optimization"`.
 
-**Task C — Tolerance Phrase Mapping:** Same resolution as Task B, but results go into a separate output (`tolerance_keyword_mapping`), keeping the tolerance tier isolated from the explicit tier.
+**Task C — Tolerance Phrase Mapping:** Same resolution as Task B, but results go into a separate output (`tolerance_keyword_mapping`), keeping the tolerance tier isolated.
+
+**Note:** Task B's scope is intended to narrow over time as FEA-04 semantic scoring demonstrates coverage. Phrases FEA-04 handles accurately can be removed from Task B's vocabulary list.
 
 ---
 
 ## Node 04 — TheMergerJS
 
 **Runs:** Every query  
-**Input:** Resolver output + Taxonomist output + ConstantsProvider  
+**Input:** Resolver output + Enricher output + ConstantsProvider  
 **Output:** A single clean `search_contract` object
 
-The Merger combines everything from the Resolver and Taxonomist into a clean, four-tiered `search_contract` that downstream nodes can query uniformly.
+The Merger combines everything from the Resolver and Enricher into a clean, four-tiered `search_contract` that downstream nodes can query uniformly.
 
 ### Tier 1 — Explicit
 
@@ -218,7 +215,7 @@ What the user directly said. Highest scoring weight.
 
 **Soft preferences:** Everything the user directly named — preferred mechanics, categories, complexity tiers, interaction, tone, format, experience_mode, family.
 
-The Merger merges the Resolver's explicit tier with the Taxonomist's `keyword_enum_mapping` results. Both sources are treated as explicit tier — the Taxonomist's mappings came from the user's words, just via the LLM fallback path.
+The Merger merges the Resolver's explicit tier with the Enricher's keyword-to-enum mapping results. Both sources are treated as explicit tier — the Enricher's mappings came from the user's words, just via the LLM fallback path.
 
 ### Tier 2 — Dials
 
@@ -244,7 +241,7 @@ What the user referenced indirectly, via anchor games or macro inferences. Lower
 
 ### Tier 4 — Tolerance
 
-Mechanics and categories the user said are acceptable but not desired. Very low scoring weight (lowest tier). Specifically lower than inferred to prevent tolerance signals from driving results. Merged from Resolver's `tolerant_soft_preferences` and Taxonomist's `tolerance_keyword_mapping`.
+Mechanics and categories the user said are acceptable but not desired. Very low scoring weight (lowest tier). Specifically lower than inferred to prevent tolerance signals from driving results. Merged from the Resolver's tolerance preferences and the Enricher's tolerance phrase mappings.
 
 ---
 
@@ -254,15 +251,15 @@ Mechanics and categories the user said are acceptable but not desired. Very low 
 **Input:** Merger output (search_contract)  
 **Output:** Filtered candidate list + search_contract + trace
 
-The Retriever fetches all games from Airtable and narrows them to a manageable candidate list before scoring runs.
+The Retriever fetches all games from the CF KV catalog and narrows them to a manageable candidate list before scoring runs.
 
-### Airtable Fetch
+### Catalog Fetch
 
-Fetches all records from two tables concurrently:
-- **Inventory table** — games physically owned and offered for sale/rental ("vault" items). Includes: Condition, Asking_price, BGG_listing, Edition_tags.
-- **External Seed table** — the main game database. Includes: Players_rec, Affiliate_link, Popularity, Mood_tags, Tiebreaker.
+Fetches records from two sources concurrently:
+- **Inventory records** — games physically owned and offered for sale/rental ("vault" items). Includes condition, pricing, and availability data.
+- **Main game catalog** — the full recommendation database. Includes player counts, affiliate links, popularity signals, and all scoring-relevant taxonomy fields.
 
-Both tables use a filtered Airtable view (only "ready" games appear). After fetching, records are normalized into a flat structure. Deduplication: if the same game appears in both tables, the inventory version takes priority. The `Tiebreaker` field is a composite popularity + availability score pre-computed in Airtable.
+Both sources serve from the Cloudflare KV cache (12h TTL, stale-while-revalidate). After fetching, records are normalized into a flat structure. Deduplication: if the same game appears in both sources, the inventory version takes priority. The tiebreaker is a composite popularity + availability score pre-computed at enrichment time.
 
 ### Three-Stage Filtering
 
@@ -359,7 +356,7 @@ Strength multipliers scale linearly across low/medium/high levels, and there's a
 
 ### Text Matching
 
-The Scorer scans game text (summary, verdict, pros, cons, Mood Tags) against the user's original phrases. Four keyword categories:
+The Scorer scans the game's text content against the user's original phrases. Four keyword categories:
 
 - **Logistics** ("easy setup", "low downtime", "portable") — matched against Pros, penalized if they appear in Cons with negative context
 - **Group Fit** ("family friendly", "gateway", "easy to learn") — matched against Pros + Summary
@@ -375,6 +372,20 @@ The Scorer scans game text (summary, verdict, pros, cons, Mood Tags) against the
 Non-ordinal: exact match only, two tiers. Explicit (user said "cooperative") earns the most; inferred (Merger derived from cross-field inference) earns less.
 
 **Antipode penalties (the system's strongest):** Recommending a competitive game when someone asked for co-op — or vice versa — is a category error, not a preference mismatch. The system applies near-disqualifying penalties for these cases. Co-op requested + non-co-op game → maximum penalty. Aggression requested + co-op game → maximum penalty. A small "unknown" penalty applies when the game has no experience_mode tag and isn't tagged with "Cooperative" — not confirmed wrong, but uncertain.
+
+### Semantic Cosine Similarity (Section J5) — FEA-04
+
+**What it solves:** The structured scoring system (Sections A–J) can only score signals that map to DB fields. Unmapped phrases — atmospheric language, niche vocabulary, unlisted mechanics — contribute nothing structurally. Section J5 handles this residual.
+
+**How it works:** Each game has a pre-computed 768-dimensional embedding vector (Gemini Embedding 001) built from a curated set of experiential and qualitative text — the language that describes how a game feels to play, its atmosphere, and what makes it distinctive. At query time, the Retriever fires an embed call to the CF Worker `/api/embed` endpoint — in parallel with the catalog fetch — which embeds all unmapped phrases and returns pre-computed cosine similarity scores for each candidate game. The Scorer incorporates these scores rather than computing similarity itself.
+
+**Boundary:** Only unmapped phrases reach Section J5. Mapped phrases already have a structural scoring path (Sections A–J); routing them to semantic scoring too would double-count.
+
+**Negation flag path:** The Resolver's existing negation detection tags phrases as `negated: true`. This flag is preserved through Merger (`semantic_phrases[].negated`) → Retriever output → Scorer. The Scorer inverts the cosine contribution for negated phrases. Embedding models do not natively detect negation — the flag must be preserved explicitly.
+
+**Framing noun rule:** "Theme" and "game" are stripped from `core_terms` before phrases reach the semantic pipeline. These words appear in virtually every game description and inflate cosine similarity uniformly across all candidates, adding no signal.
+
+**Flag:** `ENABLE_SEMANTIC_SCORING` in ConstantsProvider controls Section J5 without affecting any other scoring section.
 
 ### Strong Signal Amplifier (Section M)
 
@@ -415,7 +426,7 @@ After sorting (score → inventory-first → scoring breadth → data completene
 **Input:** Scorer output (top 6 + search_contract)  
 **Output:** `{ recommendations: [...], query_summary: {...} }`
 
-Maps internal Airtable field names to frontend-friendly names. Formats playtime as "30–60 min" from minute-range fields. Applies category rotation across the 6 results to avoid showing the same label repeatedly.
+Maps internal field names to frontend-friendly names. Formats playtime as "30–60 min" from minute-range fields. Applies category rotation across the 6 results to avoid showing the same label repeatedly.
 
 ### Why-This Blurbs
 
@@ -437,7 +448,7 @@ The full search_contract, resolver trace, merger trace, and unmapped_terms are p
 
 **Fail-open vs fail-closed:** Player count is fail-closed because including an unplayable game is worse than missing a good one. All other filters are fail-open because missing data is common and over-exclusion would be too aggressive.
 
-**Two LLM calls maximum:** IntentInterpreter runs every time. Taxonomist only when something couldn't be resolved. Average: 2,500–3,400 tokens per query.
+**Two mandatory LLM calls, one conditional:** IntentInterpreter runs every query. The Formatter always makes a Groq call for per-game blurbs. TheEnricherJS fires only when the Resolver has unresolved items (~20–30% of queries). Average: 2,500–3,400 tokens across mandatory calls. The CF Worker embed call (Section J5) is not an LLM call — it's a vector embedding API call that runs in the CF Worker, not in the Flowise pipeline. It adds +100–200ms and ~$0.000001 per query.
 
 **Ordinal arrays as precedence-ordered truth:** The DB_ENUM arrays in ConstantsProvider double as the ordinal scale for distance calculations. One source of truth for both enum validity and ordinal ordering — no drift between them.
 

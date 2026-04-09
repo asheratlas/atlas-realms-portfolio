@@ -33,7 +33,7 @@ The challenge isn't "how do I get an LLM to recommend games." It's "how do I rel
 | Pure LLM (game database in context) | ~$0.08–0.40 | 15–30s+ | No | No |
 | Pure LLM (tool-call retrieval) | ~$0.04–0.15 | 8–15s | Weakly | No |
 | Traditional ML / vector embeddings | ~$0.001 | <100ms | Partially | Yes |
-| **Hybrid: LLM intent extraction + JS scoring** | **~$0.0004** | **5–10s** | **Yes** | **Yes** |
+| **Hybrid: LLM intent extraction + JS scoring** | **~$0.0012** | **5–10s** | **Yes** | **Yes** |
 
 **Why not pure LLM?** Inconsistency is disqualifying for a product. Users notice when the same query returns different results on refresh. And retroactive LLM explanations ("this game appears because it matches your preferences") are not grounded in any actual computation — the model is confabulating. The 37% inconsistency rate I measured was the clearest signal to abandon the pure-LLM path.
 
@@ -57,12 +57,12 @@ User query (natural language)
       1. ~150-entry synonym dictionary (deterministic, zero LLM cost)
       2. Direct enum match
       3. Fuzzy substring match
-      4. Unmapped → forward to Taxonomist
+      4. Unmapped → forward to Enricher
     Applies style macros, fetches anchor game data from Airtable
     ↓
-[Node 03] Taxonomist  ← LLM, conditional (~30% of queries)
+[Node 03] Enricher  ← LLM, conditional (~20–30% of queries)
     Skipped entirely if everything resolved cleanly.
-    Only runs for: unmapped phrases, or games not in the database.
+    Only runs for: unmapped phrases, or anchor games not in the database.
     ↓
 [Node 04] MergerJS  ← pure JS
     Assembles a 4-tier "search contract":
@@ -124,13 +124,15 @@ This gives three compounding wins:
 
 | Component | Model | Cost per query |
 |---|---|---|
-| IntentInterpreter (LLM, always) | Gemini 2.5 Flash Lite | ~$0.0004 |
-| Taxonomist (LLM, ~30% of queries) | Groq (free tier) | ~$0.0000 |
-| Retriever (Airtable via Cloudflare KV cache) | — | ~$0.0000 |
+| IntentInterpreter (LLM, always) | Gemini 2.5 Flash Lite | ~$0.00061 |
+| Enricher Task A (unknown anchor enrichment, ~20–30% of queries) | Gemini 2.0 Flash | ~$0.00015 blended |
+| Enricher Task B (unmapped phrase resolution, when needed) | Gemini 2.0 Flash | ~$0.00020 blended |
+| Formatter blurbs (LLM, always) | Groq gpt-oss-20b | ~$0.00024 |
+| Retriever (CF KV cache) | — | ~$0.0000 |
 | All other JS nodes | — | ~$0.0000 |
-| **Blended per-query** | | **~$0.0004** |
+| **Blended per-query** | | **~$0.0012** |
 
-The Taxonomist runs on only ~30% of queries because the synonym dictionary covers most of human vocabulary about this domain. When a user says "chill", "light", "co-op", "quick", "strategic", "party game" — all of that maps cleanly without a second LLM call. The LLM only fires when the user says something genuinely novel.
+The Enricher runs on only ~20–30% of queries because the synonym dictionary covers most vocabulary about this domain. When a user says "chill", "light", "co-op", "quick", "strategic", "party game" — all of that maps cleanly without an LLM call. The Enricher only fires when the user says something genuinely novel, or when an anchor game isn't in the database.
 
 The KV cache layer has a second cost impact beyond LLM spend: it eliminated full-table Airtable fetches on every query. Before caching, the Retriever made up to 11 paginated API calls per request to fetch ~2,000 records. After: a single KV read serves ~1,100 games. **~99.75% reduction in data transfer per query.**
 
@@ -138,18 +140,18 @@ The KV cache layer has a second cost impact beyond LLM spend: it eliminated full
 
 | Stage | Before | After | Reduction |
 |---|---|---|---|
-| End-to-end | 31–35s | 5–10s | ~70% |
+| End-to-end | 31–35s | 5–10s | ~84% |
 | IntentInterpreter | 14–18s | 2–4s | ~80% |
-| Retriever (Airtable) | 550ms–3.5s | 190–730ms | ~65% |
+| Retriever (CF KV cache) | 550ms–3.5s | 190–730ms | ~65% |
 
 **At 10,000 queries/month:**
 
 | Approach | Monthly cost |
 |---|---|
-| This architecture | ~$4 |
-| Pure LLM (conservative estimate) | ~$400–4,000 |
+| This architecture | ~$12 |
+| Pure LLM (conservative estimate) | ~$800–4,000 |
 
-At scale, the gap compounds. At 100,000 queries/month it's $40 vs. $4,000–40,000. The architectural decision becomes increasingly correct over time.
+Break-even against affiliate income: each $2 commission covers approximately 1,730 mid-tier queries. At scale, the gap compounds. At 100,000 queries/month it's $120 vs. $8,000–40,000. The architectural decision becomes increasingly correct over time.
 
 ---
 
@@ -207,7 +209,7 @@ Cost is nearly fixed per query. It doesn't scale with database size (the JS node
 
 **Add output schema validation on day one.** The IntentInterpreter prompt specifies exactly what JSON to produce, but LLMs drift on edge cases. I validate and coerce the output before passing it downstream, but I added this retroactively after chasing downstream bugs from malformed LLM output. It should be the first thing you build when an LLM is in the critical path.
 
-**Design the conditional LLM skip from the start.** I initially ran the Taxonomist on every query. The conditional skip came later when I noticed that most queries don't need it. Designing the skip condition into the architecture from the beginning — rather than as an optimization after the fact — would have saved a meaningful refactor.
+**Design the conditional LLM skip from the start.** I initially ran the Enricher on every query. The conditional skip came later when I noticed that most queries don't need it. Designing the skip condition into the architecture from the beginning — rather than as an optimization after the fact — would have saved a meaningful refactor.
 
 ---
 
@@ -217,8 +219,8 @@ Cost is nearly fixed per query. It doesn't scale with database size (the JS node
 |---|---|
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Full node-by-node technical walkthrough |
 | [`SCORING_SYSTEM.md`](./SCORING_SYSTEM.md) | Scoring engine deep dive — all 14+ dimensions |
-| [`workers/api-proxy-worker.js`](./workers/api-proxy-worker.js) | The Cloudflare Worker (CORS proxy + KV catalog cache) |
+| [`workers/flowise-proxy.js`](./workers/flowise-proxy.js) | Cloudflare Worker — CORS enforcement, routes requests to the Flowise pipeline |
+| [`workers/catalog-cache.js`](./workers/catalog-cache.js) | Cloudflare Worker — KV-backed game catalog cache, cron-triggered refresh |
 
 ---
 
-*Atlas Realms v2 pipeline — Scorer v5.8, ConstantsProvider v9.5*

@@ -3,7 +3,7 @@
 > **Is this system complex?**
 > Yes. Objectively. This is a multi-tier, multi-dimension, ordinal-distance scoring engine with 15 active scoring dimensions, 3 signal tiers per dimension, distance-graduated penalties, a conditional score multiplier, a semantic floor cap, a strong-signal amplifier, and a 5-criteria deterministic tiebreaker. Most commercial recommenders use simple tag overlap or collaborative filtering. This engine computes a structured compatibility score by reasoning about *what the user meant*, not just *what they said*.
 
-This document is the technical reference for the Scorer — Node 06 in the 7-node pipeline. For the overall architecture, see [`ARCHITECTURE.md`](./ARCHITECTURE.md). For the reasoning behind the hybrid LLM + deterministic approach, see [`ADR_hybrid_llm_architecture.md`](./ADR_hybrid_llm_architecture.md).
+This document is the technical reference for the Scorer — Node 06 in the pipeline. For the overall architecture, see [`ARCHITECTURE.md`](./ARCHITECTURE.md). For the reasoning behind the hybrid LLM + deterministic approach, see [`ADR_hybrid_llm_architecture.md`](./ADR_hybrid_llm_architecture.md).
 
 ---
 

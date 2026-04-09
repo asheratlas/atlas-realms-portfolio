@@ -28,16 +28,13 @@ The challenge isn't "how do I get an LLM to recommend games." It's "how do I rel
 
 ## The Options I Considered
 
-| Approach | Cost/query | Latency | Explainable | Consistent |
-|---|---|---|---|---|
-| Pure LLM (game database in context) | ~$0.08–0.40 | 15–30s+ | No | No |
-| Pure LLM (tool-call retrieval) | ~$0.04–0.15 | 8–15s | Weakly | No |
-| Traditional ML / vector embeddings | ~$0.001 | <100ms | Partially | Yes |
-| **Hybrid: LLM intent extraction + JS scoring** | **~$0.0012** | **5–10s** | **Yes** | **Yes** |
-
 **Why not pure LLM?** Inconsistency is disqualifying for a product. Users notice when the same query returns different results on refresh. And retroactive LLM explanations ("this game appears because it matches your preferences") are not grounded in any actual computation — the model is confabulating. The 37% inconsistency rate I measured was the clearest signal to abandon the pure-LLM path.
 
-**Why not traditional ML?** Great for "find things similar to this thing." Poor for "find things matching a set of constraints expressed in natural language where the vocabulary is fuzzy and the constraint structure isn't known in advance." You'd need training data mapping user phrases to database fields. I don't have that at launch. And even with it, relative queries ("lighter than Terraforming Mars") require reasoning about ordinal relationships — not just similarity.
+There's also a training data bias: LLMs are trained on text that skews heavily toward the most-discussed titles. In practice, the same 15–20 popular games surface across many different prompts regardless of how specific the query is. The long tail — games that fit the request better but are less written about — is structurally underrepresented.
+
+**Why not traditional ML?** The standard approaches — collaborative filtering, content-based similarity — optimize for a different problem. Collaborative filtering asks *what do people like you tend to like?* Content-based asks *what items resemble items you've liked?* Both assume a single user with a preference history. Board games are a group activity. The recommendation unit is a group with a situation: four people, mixed experience, one person wants something light, nobody wants 20 minutes of rules tonight. There's no individual preference history to filter on. There's no item to be "similar to."
+
+Could ML handle this with the right training data? Arguably yes — but at launch that data doesn't exist, and the constraint structure (player count, time window, conflicting preferences within the group, relative queries like "lighter than what we usually play") interacts in ways that similarity search handles poorly. At current scale, the deterministic approach wins on cost, interpretability, and the ability to fix specific failures without retraining.
 
 **Why hybrid?** LLMs are genuinely good at extracting structured intent from unstructured text. They're bad at arithmetic, consistency, and reasoning about constraint satisfaction across a schema they've been given. Split the job accordingly.
 

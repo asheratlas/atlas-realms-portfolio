@@ -303,6 +303,81 @@ The discipline that makes RICE honest rather than theatrical: not working backwa
 
 ---
 
+## The Vocabulary Coverage Problem: When the Dictionary Reaches Its Ceiling
+
+### How the Dictionary Works
+
+The recommendation engine handles natural language by first running every user phrase through a large synonym dictionary — a curated mapping of natural-language terms to specific structured database fields. "Chill" maps to a relaxed tone preference. "Co-op" maps to a cooperative category. "Brain burner" maps to high decision complexity. When a phrase hits the dictionary, it gets routed directly to the relevant scoring dimension without any LLM involvement.
+
+This is fast, deterministic, and cheap. The dictionary handles ~84% of vocabulary about this domain — which means most queries run through structured scoring with no fuzzy matching required.
+
+### The Ceiling
+
+The dictionary has a structural ceiling. As it grows, you notice a property: every term you add to the dictionary is a term that will *never* reach the semantic search layer.
+
+This matters because the semantic search layer handles vocabulary differently. It doesn't classify phrases — it matches them by embedding similarity against the game's qualitative descriptions. A phrase like "cozy autumn feeling" doesn't map to any database field, but it matches meaningfully against games described in that register.
+
+If you add "cozy" to the synonym dictionary (mapping it to, say, a tone preference), you've gained a precise match at the cost of losing the semantic signal. The dictionary entry fires first; the phrase never reaches the embedding layer.
+
+The correct strategy: **add terms to the dictionary when you want a specific, reliable field mapping.** Leave terms out of the dictionary when the value is in semantic richness — atmospheric phrases, vibe language, descriptions that work by resemblance rather than by definition.
+
+This isn't obvious from just looking at the dictionary. It became visible when I was deciding whether to add "atmospheric" as a synonym. Adding it would give a mechanical match against specific tone values. Leaving it out means queries for "atmospheric games" get handled by embedding similarity — which matches against the actual qualitative texture of game descriptions. The second approach is strictly better for that term, but it required understanding the consuming step before making the decision.
+
+### The Practical Rule
+
+For any candidate vocabulary addition:
+- **Add to dictionary** if there's an obvious, correct field mapping and the mapping won't lose nuance ("2 players" → player count)
+- **Leave for semantic** if the phrase works by feel and an embedding match will be richer than any single-field mapping ("tense", "immersive", "old-school dungeon crawl")
+- **Both, with different phrases** if the dictionary covers the explicit form and semantic covers the atmospheric variants ("cooperative" in dictionary, "games that feel collaborative" left for semantic)
+
+This is the vocabulary architecture insight that semantic embeddings unlock — it's not just a fallback for unmapped terms, it's a separate lane that handles certain kinds of meaning better than structured fields can.
+
+---
+
+## Evaluating AI Components: Selecting on Failure Mode Severity
+
+### The Setup
+
+Before launching v2, I ran a structured head-to-head evaluation of six LLM candidates for the IntentInterpreter role: GPT-OSS-120B (Groq), GPT-4.1-mini, GPT-4.1, Gemini 2.0 Flash, Gemini 2.5 Flash Lite, and llama-3.3-70b-versatile.
+
+The evaluation was possible because the pipeline is deterministic downstream of the LLM. The scoring, filtering, and ranking all produce the same output for the same input. That means I could isolate the LLM as the variable and measure what it contributed specifically.
+
+Three representative prompts. Two to three runs each. Scored on: anchor role classification, dial extraction accuracy, player count parsing, and cross-run consistency.
+
+### Why Accuracy Alone Wasn't the Selection Criterion
+
+Standard model evaluation asks: which model gets the right answer most often? That's not the right question for this context.
+
+The right question is: **what happens when the model is wrong?**
+
+The IntentInterpreter's output structure has fields with very different downstream consequences. An error in dial extraction produces a suboptimal result — the game recommendations are slightly off. The user might notice, might not. The fix is: submit the query again with clearer language.
+
+An error in player role classification — misidentifying an `anchor_include` game as a `comparison_anchor`, or misclassifying a player count — corrupts the search contract in a way that can produce actively wrong results with no obvious signal that anything failed. The user gets a confident-looking recommendation set that doesn't match what they asked for. That's not a recoverable error from the user's perspective.
+
+The taxonomy:
+- **Recoverable miss:** wrong dial, slightly off inferred preference → suboptimal result, user can adjust
+- **Silent distortion:** wrong anchor classification, corrupted player count → wrong result with confident presentation → trust damage
+- **Hard failure:** valid JSON not returned → pipeline fails, error state
+
+A model with 85% accuracy but occasional silent distortions is worse than a model with 82% accuracy and no silent distortions. The selection criterion was **failure mode severity**, not raw accuracy.
+
+### The Selection
+
+Gemini 2.5 Flash Lite won on that basis. Not because it was the most accurate on every dimension — GPT-4.1 was more accurate on some edge cases. It won because it had the most consistent failure mode profile: when it was wrong, it was wrong in recoverable ways. It didn't misclassify anchor roles. It didn't hallucinate player count structures.
+
+This is the kind of evaluation that only becomes possible when the pipeline is deterministic downstream of the LLM. With a pure LLM approach, you can't isolate the model as the variable — the whole system shifts when you swap models. The hybrid architecture turns model evaluation into a controlled experiment.
+
+### The Broader Lesson
+
+When you're selecting any AI component for a pipeline where downstream effects are measurable and deterministic, the evaluation should be:
+1. What are the failure modes for this component specifically?
+2. Which failures are recoverable (user can work around) vs. silent distortions (user can't tell something's wrong) vs. hard failures (system breaks)?
+3. Which model minimizes the severity of failures, not just the frequency?
+
+This applies beyond LLMs — the same logic shaped decisions about the semantic embedding approach, the consensus voting for catalog enrichment, and the Formatter's blurb generation strategy.
+
+---
+
 ## What I'm Still Testing
 
 ### The Input Problem

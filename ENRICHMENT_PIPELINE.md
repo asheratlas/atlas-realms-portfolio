@@ -238,7 +238,7 @@ Under $5 to fully enrich 1,000 games across all pipeline layers. The dominant co
 
 - **1,000+ records enriched** across all pipeline layers, 2 failures on extraction step (99.8% success rate)
 - **Consensus rate on binary fields:** ~87% unanimous (all 3 agree), ~11% majority (2/3), ~2% flagged for manual review
-- **Writer layer quality:** Sample of 50 reviewed — rated 8.3/10 on specificity vs. generic alternatives
+- **Writer layer quality:** Sample of 50 reviewed internally — rated 8.3/10 on specificity vs. generic alternatives
 - **Semantic vocabulary:** Category-separated clusters generated for all records; embedding search covers vocabulary the structured scoring system cannot reach
 
 ---

@@ -86,17 +86,14 @@ This system is different: **LLMs handle only natural language understanding. Jav
 | End-to-end latency | 5–10s (down from 31–35s, ~84% reduction) |
 | Average cost per query (mid-tier) | ~$0.0012 |
 | Break-even (per $2 affiliate commission) | ~1,730 mid-tier queries |
-| IntentInterpreter | Gemini 2.5 Flash Lite (~$0.00061) |
-| Enricher (conditional, when unknown anchors present) | Gemini 2.0 Flash (~$0.00059 when fired) |
-| Formatter blurbs | Groq gpt-oss-20b (~$0.00024) |
+| IntentInterpreter | Gemini 2.5 Flash Lite |
+| Enricher (conditional, when unknown anchors present) | Gemini 2.0 Flash |
+| Formatter blurbs | Groq gpt-oss-20b |
 | Semantic embed call | CF Worker (not an LLM call; +100–200ms) |
-| Equivalent pure-LLM approach | ~$0.08–0.40/query |
-| Cost at 10k queries/month | ~$12 vs ~$800–4,000 |
 | Consistency (10-prompt validation suite) | 100% on current suite (up from 62.5% in Feb 2026) — the suite is small; this reflects the deterministic scoring pipeline, not a comprehensive benchmark. New edge cases can surface inconsistencies; each is diagnosed and fixed in the LLM extraction layer. |
 | Airtable data transfer reduction | ~99.75% per query (KV cache vs. 11 paginated calls) |
-| Game catalog | 1,000+ titles, 15 taxonomy dimensions each |
+| Game catalog | 1,000+ titles, 16+ taxonomy dimensions each |
 | Semantic vectors in KV | 1,000+ × 768-dim float32 (Gemini Embedding 001) |
-| Scoring dimensions | 16+ |
 | Hard filter stages | 3 (explicit → dial → inferred ±1) |
 | Typical candidate pool after filtering | 50–200 from ~1,100 total |
 | Max results returned | 6 |
@@ -107,7 +104,7 @@ This system is different: **LLMs handle only natural language understanding. Jav
 
 | Layer | Technology |
 |---|---|
-| Pipeline orchestration | [Flowise](https://flowiseai.com) (self-hosted) |
+| Pipeline orchestration | [Flowise](https://flowiseai.com) (in [Render](https://render.com/)) |
 | LLM | Gemini 2.5 Flash Lite (IntentInterpreter), Gemini 2.0 Flash (Enricher), Groq GPT-OSS-20B (Formatter blurbs) |
 | Semantic embeddings | Gemini Embedding 001 (768-dim, pre-computed, stored in CF KV) |
 | Database | Airtable (Inventory + External Seed tables) |

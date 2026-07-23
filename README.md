@@ -83,7 +83,7 @@ This system is different: **LLMs handle only natural language understanding. Jav
 
 | Metric | Value |
 |---|---|
-| End-to-end latency | 5–10s (down from 31–35s, ~84% reduction) |
+| End-to-end latency | 5–10s (down from 31–35s, ~78% reduction) |
 | Average cost per query (mid-tier) | ~$0.0012 |
 | Break-even (per $2 affiliate commission) | ~1,730 mid-tier queries |
 | IntentInterpreter | Gemini 2.5 Flash Lite |
@@ -122,6 +122,14 @@ This system is different: **LLMs handle only natural language understanding. Jav
 - Handling the messy gap between natural language and structured data (synonym maps, fuzzy matching, ordinal distance logic, semantic embeddings for unbounded vocabulary)
 - Thinking carefully about failure modes (fail-open vs fail-closed, semantic floor caps, vault quality gates, negation-aware scoring)
 - Building for unit economics from day one, not retrofitting them later
+
+---
+
+## Related Work
+
+- [career-copilot-portfolio](https://github.com/asheratlas/career-copilot-portfolio) (evidence-first AI career system, agentic architecture)
+- [atlas-trade-portfolio](https://github.com/asheratlas/atlas-trade-portfolio) (deterministic multi-party trading platform, no AI)
+- Full portfolio: [asheratlas.com](https://www.asheratlas.com)
 
 ---
 

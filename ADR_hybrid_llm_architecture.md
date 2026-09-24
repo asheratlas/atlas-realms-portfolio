@@ -2,6 +2,7 @@
 
 **Status:** Implemented  
 **Date:** 2026-03-09  
+**Brought current:** August 2026 — Intent Interpreter model and the blurb path.  
 **Context:** Atlas Realms — a board game recommendation engine that receives natural language queries and returns ranked recommendations from a structured database of ~500–1,000 records.
 
 ---
@@ -76,14 +77,14 @@ User query (natural language)
     Computes a numeric score for every candidate across 14+ dimensions.
     Deterministic. Every point is traceable to a specific signal.
     ↓
-[Node 07] FormatterJS  ← pure JS
-    Generates "why this" blurbs from the actual scoring trace.
+[Node 07] FormatterJS  ← JS selects and caps; a model writes the blurb
+    The blurb is written from the scoring trace, not invented after the fact.
     Applies diversity selection (max 2 per design family, vault quality gate).
     ↓
 { recommendations: [...], query_summary: {...trace...} }
 ```
 
-**The core split:** LLMs handle natural language understanding only. JavaScript handles filtering, scoring, ranking, and explainability.
+**The core split:** Models interpret and explain. Code applies the constraints and computes the ranking. A model reads the request, fills a gap when a named game isn't recognized, and writes the short reason on each result from the score it was given.
 
 **One structural decision that compounds:** The IntentInterpreter produces a chain-of-thought `reasoning` field before its JSON output. This forces the model to articulate its interpretation of the query before committing to extractions — what the user wants, what every game reference implies, and what any contrast language means. It's the "show your work" equivalent for LLMs. Downstream extraction consistency improved measurably when this was added.
 
@@ -121,13 +122,15 @@ This gives three compounding wins:
 
 | Component | Model | Cost per query |
 |---|---|---|
-| IntentInterpreter (LLM, always) | Gemini 2.5 Flash Lite | ~$0.00061 |
+| IntentInterpreter (LLM, always) | gemini-3.5-flash-lite | ~$0.00061 |
 | Enricher Task A (unknown anchor enrichment, ~20–30% of queries) | Gemini 2.0 Flash | ~$0.00015 blended |
 | Enricher Task B (unmapped phrase resolution, when needed) | Gemini 2.0 Flash | ~$0.00020 blended |
 | Formatter blurbs (LLM, always) | Groq gpt-oss-20b | ~$0.00024 |
 | Retriever (CF KV cache) | — | ~$0.0000 |
 | All other JS nodes | — | ~$0.0000 |
-| **Blended per-query** | | **~$0.0012** |
+| **Weighted average, August 2026** | | **~$0.0016** |
+
+The component rows above are the earlier per-call build-up. Measured across the recorded query mix in August 2026, the weighted average is about $0.0016.
 
 The Enricher runs on only ~20–30% of queries because the synonym dictionary covers most vocabulary about this domain. When a user says "chill", "light", "co-op", "quick", "strategic", "party game" — all of that maps cleanly without an LLM call. The Enricher only fires when the user says something genuinely novel, or when an anchor game isn't in the database.
 
@@ -145,10 +148,10 @@ The KV cache layer has a second cost impact beyond LLM spend: it eliminated full
 
 | Approach | Monthly cost |
 |---|---|
-| This architecture | ~$12 |
+| This architecture | ~$16 |
 | Pure LLM (conservative estimate) | ~$800–4,000 |
 
-Break-even against affiliate income: each $2 commission covers approximately 1,730 mid-tier queries. At scale, the gap compounds. At 100,000 queries/month it's $120 vs. $8,000–40,000. The architectural decision becomes increasingly correct over time.
+Break-even against affiliate income: each $2 commission covers about 1,250 queries at the August weighted cost. At scale, the gap compounds. At 100,000 queries/month it's about $160 vs. $8,000–40,000. The architectural decision becomes increasingly correct over time.
 
 ---
 
@@ -156,7 +159,7 @@ Break-even against affiliate income: each $2 commission covers approximately 1,7
 
 **1. Explainability that's actually accurate**
 
-Every recommendation comes with a "why this" blurb — but it's generated from the actual scoring trace, not by asking an LLM to explain itself retroactively. When a game appears because it has the right mechanics, correct player count, and matching tone, the blurb says exactly that. When a game appears on logistics merits alone with weak semantic matching, the blurb says "Fits your [constraint] but doesn't fully capture the feel you described."
+Every recommendation comes with a "why this" blurb. A model writes that sentence from the scoring trace. It is not asked to invent the reason after the fact. When a game appears because it has the right mechanics, correct player count, and matching tone, the blurb says exactly that. When a game appears on logistics merits alone with weak semantic matching, the blurb says "Fits your [constraint] but doesn't fully capture the feel you described."
 
 The system can be *honest* about match quality because it has a real score. LLMs confabulate explanations with equal confidence regardless of whether the underlying recommendation is good or bad.
 

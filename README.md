@@ -1,8 +1,8 @@
 # Atlas Realms — Backend Architecture Portfolio
 
-> **"I build AI products designed to survive unit economics."**
+> **Ask Atlas turns a group's situation into a ranked shortlist. Models interpret the messy parts of the request. Code applies the constraints, scoring and ranking.**
 
-A board game recommendation engine that takes natural language queries and returns ranked, explainable results from a structured database. This folder contains the architecture documentation and code artifacts for the backend pipeline.
+This folder is the architecture behind that system: how a natural-language request becomes a ranked, explainable shortlist, without the production codebase or the catalog data.
 
 Live product: [atlasrealms.com](https://www.atlasrealms.com)
 
@@ -18,7 +18,7 @@ This repository is not the production codebase. It exists to document the archit
 
 Many early AI recommendation systems are built primarily around prompt reasoning — you describe what you want, the LLM thinks, you get a list. That approach costs $0.40/query, returns different results for the same input, and can't explain why anything appeared.
 
-This system is different: **LLMs handle only natural language understanding. JavaScript handles filtering, scoring, ranking, and explainability.** The result is a deterministic, traceable, ~$0.0012/query pipeline.
+This system is different: **Models interpret and explain. Code applies the constraints and computes the ranking.**
 
 ---
 
@@ -51,15 +51,15 @@ This system is different: **LLMs handle only natural language understanding. Jav
 
 | File | What it is |
 |---|---|
-| [`ADR_hybrid_llm_architecture.md`](./ADR_hybrid_llm_architecture.md) | Architecture Decision Record — *why* the hybrid approach, with real unit economics |
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Full system walkthrough — every node, every design decision, every edge case |
+| [`ADR_hybrid_llm_architecture.md`](./ADR_hybrid_llm_architecture.md) | Why the system is hybrid |
+| [`PRODUCT_DECISIONS.md`](./PRODUCT_DECISIONS.md) | Why the product changed after it was in users' hands |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | The node-by-node path |
 | [`SCORING_SYSTEM.md`](./SCORING_SYSTEM.md) | Deep dive into the scoring engine — 16+ dimensions, 4 signal tiers, all weights |
 | [`workers/flowise-proxy.js`](./workers/flowise-proxy.js) | Cloudflare Worker — CORS enforcement, routes requests to the Flowise pipeline |
 | [`workers/catalog-cache.js`](./workers/catalog-cache.js) | Cloudflare Worker — KV-backed game catalog cache, cron-triggered refresh |
 
-**Start with the ADR** if you want to understand the philosophy.
-**Read ARCHITECTURE.md** if you want the full technical depth.
-**Read SCORING_SYSTEM.md** if you want to understand the ranking engine specifically.
+**The ADR is why the system is hybrid. Architecture is the node-by-node path.**
+**Read SCORING_SYSTEM.md** if you want the ranking engine specifically.
 
 ---
 
@@ -84,9 +84,9 @@ This system is different: **LLMs handle only natural language understanding. Jav
 | Metric | Value |
 |---|---|
 | End-to-end latency | 5–10s (down from 31–35s, ~78% reduction) |
-| Average cost per query (mid-tier) | ~$0.0012 |
-| Break-even (per $2 affiliate commission) | ~1,730 mid-tier queries |
-| IntentInterpreter | Gemini 2.5 Flash Lite |
+| Average cost per query | ~$0.0016 weighted across the recorded query mix (August 2026) |
+| Break-even (per $2 affiliate commission) | ~1,250 queries at that cost |
+| IntentInterpreter | gemini-3.5-flash-lite |
 | Enricher (conditional, when unknown anchors present) | Gemini 2.0 Flash |
 | Formatter blurbs | Groq gpt-oss-20b |
 | Semantic embed call | CF Worker (not an LLM call; +100–200ms) |
@@ -105,7 +105,7 @@ This system is different: **LLMs handle only natural language understanding. Jav
 | Layer | Technology |
 |---|---|
 | Pipeline orchestration | [Flowise](https://flowiseai.com) (in [Render](https://render.com/)) |
-| LLM | Gemini 2.5 Flash Lite (IntentInterpreter), Gemini 2.0 Flash (Enricher), Groq GPT-OSS-20B (Formatter blurbs) |
+| LLM | gemini-3.5-flash-lite (IntentInterpreter), Gemini 2.0 Flash (Enricher), Groq GPT-OSS-20B (Formatter blurbs) |
 | Semantic embeddings | Gemini Embedding 001 (768-dim, pre-computed, stored in CF KV) |
 | Database | Airtable (Inventory + External Seed tables) |
 | Catalog cache | Cloudflare KV (12h TTL, stale-while-revalidate) |

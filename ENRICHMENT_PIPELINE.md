@@ -42,7 +42,7 @@ Confidence feeds directly into the consolidation step — rulebook data from a H
 
 **Purpose:** Extract structured taxonomy from the authoritative source.
 
-Using Gemini 2.0 Flash with the rulebook PDF as the primary context, the pipeline extracts objective and semi-objective fields. The extraction prompt specifies exact definitions and counter-examples for each field — the same prompt engineering discipline applied to the multi-model consensus step.
+Using gemini-2.5-flash-lite with the rulebook PDF as the primary context, the pipeline extracts objective and semi-objective fields. The extraction prompt specifies exact definitions and counter-examples for each field — the same prompt engineering discipline applied to the multi-model consensus step.
 
 **Confidence multiplier:** The rulebook extraction confidence is factored into the final weight. A High-confidence rulebook source at full weight outweighs any other source for the fields it covers. A Low-confidence source contributes at a fraction of that weight.
 
@@ -58,7 +58,7 @@ Every model has distinct failure modes:
 
 | Model | Strength | Failure Mode |
 |---|---|---|
-| Gemini 2.0 Flash | Native Google Search grounding — finds current data from live sources | Occasionally verbose, less conservative on edge cases |
+| gemini-2.5-flash-lite | Native Google Search grounding — finds current data from live sources | Occasionally verbose, less conservative on edge cases |
 | GPT-4o-mini | Follows structured output instructions precisely | Can be confidently wrong on obscure items, occasionally injects jargon |
 | Claude Haiku | Most conservative — least likely to hallucinate a field value | Can be overly cautious, sometimes refuses ambiguous classifications |
 

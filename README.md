@@ -87,7 +87,7 @@ This system is different: **Models interpret and explain. Code applies the const
 | Average cost per query | ~$0.0016 weighted across the recorded query mix (August 2026) |
 | Break-even (per $2 affiliate commission) | ~1,250 queries at that cost |
 | IntentInterpreter | gemini-3.5-flash-lite |
-| Enricher (conditional, when unknown anchors present) | Gemini 2.0 Flash |
+| Enricher (conditional, when unknown anchors present) | gemini-2.5-flash-lite |
 | Formatter blurbs | Groq gpt-oss-20b |
 | Semantic embed call | CF Worker (not an LLM call; +100–200ms) |
 | Consistency (10-prompt validation suite) | 100% on current suite (up from 62.5% in Feb 2026) — the suite is small; this reflects the deterministic scoring pipeline, not a comprehensive benchmark. New edge cases can surface inconsistencies; each is diagnosed and fixed in the LLM extraction layer. |
@@ -105,7 +105,7 @@ This system is different: **Models interpret and explain. Code applies the const
 | Layer | Technology |
 |---|---|
 | Pipeline orchestration | [Flowise](https://flowiseai.com) (in [Render](https://render.com/)) |
-| LLM | gemini-3.5-flash-lite (IntentInterpreter), Gemini 2.0 Flash (Enricher), Groq GPT-OSS-20B (Formatter blurbs) |
+| LLM | gemini-3.5-flash-lite (IntentInterpreter), gemini-2.5-flash-lite (Enricher), Groq GPT-OSS-20B (Formatter blurbs) |
 | Semantic embeddings | Gemini Embedding 001 (768-dim, pre-computed, stored in CF KV) |
 | Database | Airtable (Inventory + External Seed tables) |
 | Catalog cache | Cloudflare KV (12h TTL, stale-while-revalidate) |

@@ -123,8 +123,8 @@ This gives three compounding wins:
 | Component | Model | Cost per query |
 |---|---|---|
 | IntentInterpreter (LLM, always) | gemini-3.5-flash-lite | ~$0.00061 |
-| Enricher Task A (unknown anchor enrichment, ~20–30% of queries) | Gemini 2.0 Flash | ~$0.00015 blended |
-| Enricher Task B (unmapped phrase resolution, when needed) | Gemini 2.0 Flash | ~$0.00020 blended |
+| Enricher Task A (unknown anchor enrichment, ~20–30% of queries) | gemini-2.5-flash-lite | ~$0.00015 blended |
+| Enricher Task B (unmapped phrase resolution, when needed) | gemini-2.5-flash-lite | ~$0.00020 blended |
 | Formatter blurbs (LLM, always) | Groq gpt-oss-20b | ~$0.00024 |
 | Retriever (CF KV cache) | — | ~$0.0000 |
 | All other JS nodes | — | ~$0.0000 |
